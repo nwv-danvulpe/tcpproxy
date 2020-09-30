@@ -57,6 +57,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pires/go-proxyproto"
 	"io"
 	"log"
 	"net"
@@ -393,7 +394,7 @@ func (dp *DialProxy) sendProxyHeader(w io.Writer, src net.Conn) error {
 	switch dp.ProxyProtocolVersion {
 	case 0:
 		return nil
-	case 1:
+	case 1, 2:
 		var srcAddr, dstAddr *net.TCPAddr
 		if a, ok := src.RemoteAddr().(*net.TCPAddr); ok {
 			srcAddr = a
@@ -406,16 +407,30 @@ func (dp *DialProxy) sendProxyHeader(w io.Writer, src net.Conn) error {
 			_, err := io.WriteString(w, "PROXY UNKNOWN\r\n")
 			return err
 		}
-
-		family := "TCP4"
-		if srcAddr.IP.To4() == nil {
-			family = "TCP6"
+		header := &proxyproto.Header{
+			SourceAddress:      srcAddr.IP,
+			DestinationAddress: dstAddr.IP,
+			SourcePort:         uint16(srcAddr.Port),
+			DestinationPort:    uint16(dstAddr.Port),
+			TransportProtocol:  getTransportProtocol(srcAddr.IP),
+			Version:            byte(dp.ProxyProtocolVersion),
 		}
-		_, err := fmt.Fprintf(w, "PROXY %s %s %d %s %d\r\n", family, srcAddr.IP, srcAddr.Port, dstAddr.IP, dstAddr.Port)
+		format, err := header.Format()
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(format)
 		return err
 	default:
 		return fmt.Errorf("PROXY protocol version %d not supported", dp.ProxyProtocolVersion)
 	}
+}
+
+func getTransportProtocol(ip net.IP) proxyproto.AddressFamilyAndProtocol {
+	if ip.To4() == nil {
+		return proxyproto.TCPv6
+	}
+	return proxyproto.TCPv4
 }
 
 // proxyCopy is the function that copies bytes around.
